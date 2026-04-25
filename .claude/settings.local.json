@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip list *)",
+      "Bash(python3 -c \"import docx; print\\('docx OK'\\)\")",
+      "Bash(python3 -c \"import openai; print\\('openai OK'\\)\")",
+      "Bash(python3 -c \"import chromadb; print\\('chroma OK'\\)\")",
+      "Bash(python3 -c \"import sentence_transformers; print\\('st OK'\\)\")",
+      "Bash(pip install *)",
+      "Bash(pip config *)",
+      "Bash(env)",
+      "Bash(python3 -c \"import urllib.request; urllib.request.urlopen\\('https://pypi.org/simple/', timeout=10\\)\")",
+      "Bash(unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY)",
+      "Bash(python3 *)"
+    ]
+  }
+}
