@@ -8,6 +8,7 @@ from datetime import datetime
 
 from agent import run_agent
 from memory import add_memory
+from tools import parse_template
 
 
 def load_text(path_or_text: str) -> str:
@@ -69,15 +70,17 @@ def main() -> None:
         print(f"  ✅ Report generated: {output_path}")
         print("=" * 60)
 
-        # Feedback loop — store generated content (not just path)
-        _collect_feedback(requirement, output_path)
+        # Feedback loop — store generated content with template context
+        _collect_feedback(requirement, output_path, template_path=args.template)
 
     except Exception as e:
         print(f"\n[ERROR] {e}")
         sys.exit(1)
 
 
-def _collect_feedback(requirement: str, output_path: str) -> None:
+def _collect_feedback(
+    requirement: str, output_path: str, template_path: str = ""
+) -> None:
     """Ask user for a rating and store memory if appropriate."""
     print("\n" + "-" * 40)
     print("  Feedback (rate the generated report)")
@@ -94,11 +97,23 @@ def _collect_feedback(requirement: str, output_path: str) -> None:
         print("  Skipped.")
         return
 
+    # Extract template headers for better embedding accuracy
+    template_headers = ""
+    if template_path:
+        try:
+            info = parse_template(template_path)
+            template_headers = " | ".join(
+                f["field_id"] for f in info.get("variable_fields", [])
+            )
+        except Exception:
+            pass
+
     try:
         add_memory(
             requirement=requirement,
             generated_content={"report_path": output_path},
             rating=rating,
+            template_headers=template_headers,
         )
         if rating >= 4:
             print(f"  ✅ Stored in memory (rating={rating}).")

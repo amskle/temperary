@@ -15,6 +15,7 @@ from config import config
 
 _client: Any = None
 _collection: Any = None
+_embedding_model: Any = None
 
 
 def _get_client() -> Any:
@@ -28,11 +29,24 @@ def _get_client() -> Any:
 
 
 def _get_embedding(text: str) -> list[float]:
-    """Embed text using sentence-transformers, imported lazily."""
-    from sentence_transformers import SentenceTransformer
+    """Embed text using sentence-transformers, with model caching."""
+    global _embedding_model
+    if _embedding_model is None:
+        from sentence_transformers import SentenceTransformer
 
-    model = SentenceTransformer(config.embedding_model)
-    return model.encode(text, show_progress_bar=False).tolist()
+        _embedding_model = SentenceTransformer(config.embedding_model)
+    return _embedding_model.encode(text, show_progress_bar=False).tolist()
+
+
+def _build_embedding_text(requirement: str, template_headers: str) -> str:
+    """Build the text used for embedding — combines template structure with requirement.
+
+    This ensures vector search retrieves few-shot examples that match both the
+    subject matter AND the specific report structure, not just the requirement.
+    """
+    if template_headers:
+        return f"Template Theme: {template_headers} | Requirement: {requirement}"
+    return requirement
 
 
 def init_memory() -> Any:
@@ -54,17 +68,20 @@ def add_memory(
     requirement: str,
     generated_content: dict[str, str],
     rating: int,
+    template_headers: str = "",
 ) -> None:
     """Store a successful generation into the vector DB (rating >= threshold).
 
     Only stores when rating >= config.memory_store_threshold (default 4).
-    The embedding is computed from the requirement text for retrieval.
+    The embedding text combines template headers with the requirement so
+    vector search matches both subject AND report structure.
     """
     if rating < config.memory_store_threshold:
         return
 
     col = init_memory()
-    embedding = _get_embedding(requirement)
+    embedding_text = _build_embedding_text(requirement, template_headers)
+    embedding = _get_embedding(embedding_text)
 
     # Flatten content for storage
     content_str = "; ".join(
@@ -81,8 +98,13 @@ def add_memory(
     print(f"  [Memory] Stored case '{doc_id}' (rating={rating}).")
 
 
-def retrieve_similar(requirement: str, k: int | None = None) -> list[dict]:
+def retrieve_similar(
+    requirement: str, k: int | None = None, template_headers: str = ""
+) -> list[dict]:
     """Retrieve top-k similar past cases from the vector DB.
+
+    The query embedding combines template headers with the requirement
+    so retrieval matches both subject matter and report structure.
 
     Returns a list of dicts with keys: id, requirement, content, distance.
     """
@@ -99,7 +121,8 @@ def retrieve_similar(requirement: str, k: int | None = None) -> list[dict]:
     if count == 0:
         return []
 
-    query_emb = _get_embedding(requirement)
+    query_text = _build_embedding_text(requirement, template_headers)
+    query_emb = _get_embedding(query_text)
     results = col.query(query_embeddings=[query_emb], n_results=min(k, count))
 
     examples: list[dict] = []

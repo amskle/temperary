@@ -36,6 +36,14 @@ class Config:
     # Generation
     max_generation_retries: int = 2
 
+    # Code execution sandbox
+    code_execution_timeout: int = 30  # seconds
+    max_code_output_chars: int = 5000
+
+    # Validation
+    min_word_count: int = 30  # minimum words for valid academic content
+    enable_llm_judge: bool = True  # use LLM-as-judge for borderline validation
+
     # Output
     output_dir: str = os.getenv("OUTPUT_DIR", ".")
 
