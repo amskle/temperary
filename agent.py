@@ -190,8 +190,25 @@ _PLACEHOLDER_KEYWORDS = [
 ]
 
 
-def _looks_like_placeholder(text: str) -> bool:
-    """Check if text looks like a placeholder/fallback rather than real content."""
+def _is_cjk(text: str) -> bool:
+    """Return True if text contains significant CJK characters (>10%)."""
+    cjk_count = sum(
+        1 for ch in text
+        if ("一" <= ch <= "鿿")       # CJK Unified Ideographs
+        or ("㐀" <= ch <= "䶿")       # CJK Extension A
+        or ("　" <= ch <= "〿")       # CJK Symbols/Punctuation
+        or ("぀" <= ch <= "ヿ")       # Hiragana/Katakana
+    )
+    return cjk_count > len(text) * 0.1
+
+
+def _looks_like_placeholder(text: str, is_complex_field: bool = True) -> bool:
+    """Check if text looks like a placeholder/fallback rather than real content.
+
+    For simple metadata fields (name, student_id, date), only checks for
+    explicit placeholder artifacts. For complex academic fields, also checks
+    word/character count and sentence structure.
+    """
     text_lower = text.lower().strip()
     # Pattern match
     for pattern in _PLACEHOLDER_PATTERNS:
@@ -201,15 +218,32 @@ def _looks_like_placeholder(text: str) -> bool:
     for keyword in _PLACEHOLDER_KEYWORDS:
         if keyword in text_lower:
             return True
-    # Word count — academic content should have substantial prose
-    words = text_lower.split()
-    if len(words) < config.min_word_count:
-        return True
-    # Sentence count — should have at least 2 sentences
-    sentences = re.split(r"[.。!?！？]\s+", text)
-    real_sentences = [s for s in sentences if len(s.split()) >= 5]
-    if len(real_sentences) < 2:
-        return True
+
+    # For simple fields, being short is expected — skip content-length checks
+    if not is_complex_field:
+        return False
+
+    # CJK text: check character count instead of word count
+    if _is_cjk(text):
+        # Strip whitespace/punctuation for char count
+        chars = re.sub(r"\s+", "", text)
+        if len(chars) < config.min_word_count * 3:
+            return True
+        # Check for at least 2 CJK sentence delimiters (。！？)
+        sentence_marks = sum(1 for ch in text if ch in "。！？\n")
+        if sentence_marks < 1:
+            return True
+    else:
+        # Latin text: check word count
+        words = text_lower.split()
+        if len(words) < config.min_word_count:
+            return True
+        # Check sentence count
+        sentences = re.split(r"[.!?]\s+", text)
+        real_sentences = [s for s in sentences if len(s.split()) >= 5]
+        if len(real_sentences) < 2:
+            return True
+
     return False
 
 
@@ -259,6 +293,10 @@ def _llm_quality_check(content: dict[str, str], fields: list[dict]) -> list[str]
     return failed
 
 
+# Fields that need deep academic content (same as tools._COMPLEX_FIELD_IDS)
+_COMPLEX_FIELD_IDS = {"purpose", "principle", "steps", "result", "analysis", "conclusion"}
+
+
 def validate_content(state: AgentState) -> Literal["generate_content", "fill_and_save"]:
     """Validate generated content; retry if placeholder-like, empty, or too short."""
     content = state.get("filled_content", {})
@@ -281,9 +319,10 @@ def validate_content(state: AgentState) -> Literal["generate_content", "fill_and
     for field in fields:
         fid = field["field_id"]
         val = content.get(fid, "").strip()
+        is_complex = fid in _COMPLEX_FIELD_IDS
 
-        # Check 1: placeholder artifacts (strongest signal)
-        if _looks_like_placeholder(val):
+        # Check 1: placeholder artifacts
+        if _looks_like_placeholder(val, is_complex_field=is_complex):
             preview = val[:120].replace("\n", " ")
             print(
                 f"  Field '{fid}' looks like placeholder/fallback. "
@@ -292,19 +331,26 @@ def validate_content(state: AgentState) -> Literal["generate_content", "fill_and
             all_ok = False
             continue
 
-        # Check 2: bare minimum length (catches empty/ultra-short)
-        if len(val) < 10:
+        # Check 2: bare minimum length
+        min_len = 2 if not is_complex else 10
+        if len(val) < min_len:
             print(f"  Field '{fid}' too short ({len(val)} chars).")
             all_ok = False
             continue
 
-        print(f"  Field '{fid}': OK ({len(val)} chars, {len(val.split())} words).")
+        if is_complex:
+            chars = len(re.sub(r"\s+", "", val))
+            print(f"  Field '{fid}': OK ({len(val)} chars, {chars} content chars).")
+        else:
+            print(f"  Field '{fid}': OK ({len(val)} chars, simple field).")
 
-    # Check 3: LLM-as-judge for borderline cases (when heuristics pass but quality uncertain)
+    # Check 3: LLM-as-judge (complex fields only)
     if all_ok and config.enable_llm_judge:
-        failed_by_judge = _llm_quality_check(content, fields)
-        if failed_by_judge:
-            all_ok = False
+        complex_fields = [f for f in fields if f["field_id"] in _COMPLEX_FIELD_IDS]
+        if complex_fields:
+            failed_by_judge = _llm_quality_check(content, complex_fields)
+            if failed_by_judge:
+                all_ok = False
 
     if not all_ok and retry_count <= config.max_generation_retries:
         print(

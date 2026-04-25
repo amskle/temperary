@@ -144,39 +144,26 @@ def fill_template(
     """
     doc = Document(template_path)
 
-    # Replace in paragraphs
+    # Replace in paragraphs — iterate fields inside runs so each field gets replaced
     for para in doc.paragraphs:
-        original_text = para.text
-        new_text = original_text
         for field_id, replacement in content_mapping.items():
-            new_text = _replace_in_text(new_text, field_id, replacement)
-
-        if new_text != original_text:
-            # Apply change to runs — clear all runs and set first run text
-            placeholder = get_placeholder(field_id)
             for run in para.runs:
-                if placeholder in run.text or any(
-                    ph in run.text for ph in [f"{{{{{field_id}}}}}", f"<{field_id}>"]
-                ):
-                    run.text = run.text.replace(
-                        "{{" + field_id + "}}", replacement
-                    ).replace("<" + field_id + ">", replacement)
+                if ("{{" + field_id + "}}" in run.text
+                        or "<" + field_id + ">" in run.text):
+                    run.text = _replace_in_text(run.text, field_id, replacement)
 
     # Replace in tables
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
-                original_text = cell.text
-                new_text = original_text
                 for field_id, replacement in content_mapping.items():
-                    new_text = _replace_in_text(new_text, field_id, replacement)
-
-                if new_text != original_text:
                     for para in cell.paragraphs:
                         for run in para.runs:
-                            run.text = run.text.replace(
-                                "{{" + field_id + "}}", replacement
-                            ).replace("<" + field_id + ">", replacement)
+                            if ("{{" + field_id + "}}" in run.text
+                                    or "<" + field_id + ">" in run.text):
+                                run.text = _replace_in_text(
+                                    run.text, field_id, replacement
+                                )
 
     if output_path is None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
