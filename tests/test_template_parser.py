@@ -13,7 +13,7 @@ from tools import parse_template
 
 
 def _create_docx_with_fields(path: str) -> None:
-    """Helper: create a minimal .docx with both ``{{var}}`` and ``<var>`` placeholders."""
+    """Helper: create a minimal .docx with ``{{var}}`` placeholders."""
     doc = Document()
     doc.add_paragraph("实验报告")
     doc.add_paragraph("姓名：{{name}}    学号：{{student_id}}")
@@ -22,12 +22,12 @@ def _create_docx_with_fields(path: str) -> None:
     doc.add_paragraph("二、实验原理")
     doc.add_paragraph("{{principle}}")
     doc.add_paragraph("三、实验结果")
-    doc.add_paragraph("<result>")
+    doc.add_paragraph("{{result}}")
 
     # Table
     table = doc.add_table(rows=3, cols=2)
     table.cell(0, 0).text = "测量项目"
-    table.cell(0, 1).text = "<value>"
+    table.cell(0, 1).text = "{{value}}"
     table.cell(1, 0).text = "理论值"
     table.cell(1, 1).text = "{{expected}}"
     table.cell(2, 0).text = "结论"
@@ -63,12 +63,9 @@ class TestParseTemplate:
             }
             assert field_ids == expected, f"Missing fields: {expected - field_ids}"
 
-            # Verify placeholder styles are preserved
+            # Verify placeholder format is {{field_id}}
             for f in result["variable_fields"]:
-                assert f["placeholder"] in (
-                    "{{" + f["field_id"] + "}}",
-                    "<" + f["field_id"] + ">",
-                )
+                assert f["placeholder"] == "{{" + f["field_id"] + "}}"
         finally:
             os.unlink(path)
 
@@ -103,18 +100,3 @@ class TestParseTemplate:
 
         with pytest.raises(FileNotFoundError):
             parse_template("/nonexistent/path.docx")
-
-    def test_angle_bracket_placeholder_detected(self):
-        """Ensure ``<var>`` style placeholders are detected alongside ``{{var}}``."""
-        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as f:
-            path = f.name
-        try:
-            _create_docx_with_fields(path)
-            result = parse_template(path)
-
-            by_id = {f["field_id"]: f for f in result["variable_fields"]}
-            # 'result' uses <result>, 'principle' uses {{principle}}
-            assert by_id["result"]["placeholder"] == "<result>"
-            assert by_id["principle"]["placeholder"] == "{{principle}}"
-        finally:
-            os.unlink(path)

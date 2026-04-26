@@ -11,7 +11,8 @@
       "Bash(env)",
       "Bash(python3 -c \"import urllib.request; urllib.request.urlopen\\('https://pypi.org/simple/', timeout=10\\)\")",
       "Bash(unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY)",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "Bash(pip show *)"
     ]
   }
 }

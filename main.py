@@ -2,13 +2,15 @@
 """CLI entry point for LabReportAgent."""
 
 import argparse
+import logging
 import os
 import sys
-from datetime import datetime
 
 from agent import run_agent
 from memory import add_memory
 from tools import parse_template
+
+logger = logging.getLogger(__name__)
 
 
 def load_text(path_or_text: str) -> str:
@@ -44,48 +46,53 @@ def main() -> None:
 
     # Validate template
     if not os.path.isfile(args.template):
-        print(f"[ERROR] Template not found: {args.template}")
+        logger.error("Template not found: %s", args.template)
         sys.exit(1)
 
     requirement = load_text(args.requirement)
     code = load_text(args.code) if args.code else ""
 
-    print("=" * 60)
-    print("  LabReportAgent – AI Lab Report Generator")
-    print("  Powered by LangGraph + DeepSeek")
-    print("=" * 60)
-    print(f"  Template   : {args.template}")
-    print(f"  Requirement: {requirement[:120]}{'…' if len(requirement) > 120 else ''}")
-    print(f"  Code       : {'Yes (' + str(len(code)) + ' chars)' if code else 'No'}")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("  LabReportAgent – AI Lab Report Generator")
+    logger.info("  Powered by LangGraph + DeepSeek")
+    logger.info("=" * 60)
+    logger.info("  Template   : %s", args.template)
+    logger.info("  Requirement: %s", requirement[:120] + ('…' if len(requirement) > 120 else ''))
+    logger.info("  Code       : %s", 'Yes (' + str(len(code)) + ' chars)' if code else 'No')
+    logger.info("=" * 60)
 
     try:
-        output_path = run_agent(
+        output_path, filled_content = run_agent(
             template_path=args.template,
             user_requirement=requirement,
             code=code,
         )
 
-        print("\n" + "=" * 60)
-        print(f"  ✅ Report generated: {output_path}")
-        print("=" * 60)
+        logger.info("=" * 60)
+        logger.info("  ✅ Report generated: %s", output_path)
+        logger.info("=" * 60)
 
         # Feedback loop — store generated content with template context
-        _collect_feedback(requirement, output_path, template_path=args.template)
+        _collect_feedback(
+            requirement, filled_content, template_path=args.template
+        )
 
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user.")
+        sys.exit(0)
     except Exception as e:
-        print(f"\n[ERROR] {e}")
+        logger.error("%s", e)
         sys.exit(1)
 
 
 def _collect_feedback(
-    requirement: str, output_path: str, template_path: str = ""
+    requirement: str, filled_content: dict[str, str], template_path: str = ""
 ) -> None:
     """Ask user for a rating and store memory if appropriate."""
-    print("\n" + "-" * 40)
-    print("  Feedback (rate the generated report)")
-    print("-" * 40)
-    print("  Rating: 1 (poor) – 5 (excellent), or 0 to skip.")
+    logger.info("-" * 40)
+    logger.info("  Feedback (rate the generated report)")
+    logger.info("-" * 40)
+    logger.info("  Rating: 1 (poor) – 5 (excellent), or 0 to skip.")
 
     try:
         rating_str = input("  Your rating: ").strip()
@@ -94,7 +101,7 @@ def _collect_feedback(
         return
 
     if rating <= 0 or rating > 5:
-        print("  Skipped.")
+        logger.info("  Skipped.")
         return
 
     # Extract template headers for better embedding accuracy
@@ -111,16 +118,16 @@ def _collect_feedback(
     try:
         add_memory(
             requirement=requirement,
-            generated_content={"report_path": output_path},
+            generated_content=filled_content,
             rating=rating,
             template_headers=template_headers,
         )
         if rating >= 4:
-            print(f"  ✅ Stored in memory (rating={rating}).")
+            logger.info("  ✅ Stored in memory (rating=%d).", rating)
         else:
-            print(f"  ℹ️  Not stored (rating={rating} < 4).")
+            logger.info("  ℹ️  Not stored (rating=%d < 4).", rating)
     except Exception as e:
-        print(f"  [WARN] Failed to store memory: {e}")
+        logger.warning("  Failed to store memory: %s", e)
 
 
 if __name__ == "__main__":

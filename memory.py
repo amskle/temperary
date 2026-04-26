@@ -5,6 +5,7 @@ embedding fallback).
 """
 
 import hashlib
+import logging
 from typing import Any
 
 import chromadb
@@ -12,6 +13,7 @@ from chromadb.config import Settings
 
 from config import config
 
+logger = logging.getLogger(__name__)
 
 _client: Any = None
 _collection: Any = None
@@ -95,7 +97,7 @@ def add_memory(
         documents=[content_str],
         metadatas=[{"requirement": requirement, "rating": rating}],
     )
-    print(f"  [Memory] Stored case '{doc_id}' (rating={rating}).")
+    logger.info("  [Memory] Stored case '%s' (rating=%d).", doc_id, rating)
 
 
 def retrieve_similar(

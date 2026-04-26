@@ -1,7 +1,13 @@
 """Configuration for LabReportAgent."""
 
+import logging
 import os
 from dataclasses import dataclass, field
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s | %(name)s | %(message)s",
+)
 
 
 @dataclass
@@ -35,6 +41,7 @@ class Config:
 
     # Generation
     max_generation_retries: int = 2
+    prior_content_summary_threshold: int = 3000  # chars; summarise prior sections when exceeded
 
     # Code execution sandbox
     code_execution_timeout: int = 30  # seconds
@@ -44,6 +51,13 @@ class Config:
     min_word_count: int = 30  # minimum words for valid academic content
     enable_llm_judge: bool = True  # use LLM-as-judge for borderline validation
 
+    # Fields that need deep academic content (iterative single-field generation)
+    complex_field_ids: set[str] = field(
+        default_factory=lambda: {
+            "purpose", "principle", "steps", "result", "analysis", "conclusion"
+        }
+    )
+
     # Output
     output_dir: str = os.getenv("OUTPUT_DIR", ".")
 
@@ -52,7 +66,7 @@ config = Config()
 
 # Validate on import
 if not config.deepseek_api_key:
-    print(
-        "[WARNING] DEEPSEEK_API_KEY is not set. "
+    logging.warning(
+        "DEEPSEEK_API_KEY is not set. "
         "Use 'export DEEPSEEK_API_KEY=sk-...'"
     )

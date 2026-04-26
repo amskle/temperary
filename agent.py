@@ -1,6 +1,6 @@
 """LangGraph agent definition for LabReportAgent — ReAct-style pipeline."""
 
-import json
+import logging
 import re
 from typing import Any, Literal
 
@@ -13,10 +13,11 @@ from tools import (
     analyze_code,
     execute_code_sandbox,
     fill_template,
-    generate_report,
     generate_report_iterative,
     parse_template,
 )
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # State schema
@@ -37,35 +38,36 @@ class AgentState(dict):
     output_path: str = ""
     errors: list[str] = []
     generation_retry_count: int = 0
+    retry_feedback: str = ""
 
 
 # ---------------------------------------------------------------------------
-# Node functions — each node prints a ReAct-style Thought/Action/Observation
+# Node functions — each node uses ReAct-style Thought/Action/Observation logging
 # ---------------------------------------------------------------------------
 
 
 def parse_and_retrieve(state: AgentState) -> dict[str, Any]:
     """Parse the template and retrieve similar historical cases."""
-    print("\n" + "=" * 60)
-    print("  STEP 1: Parse Template & Retrieve Memory")
-    print("=" * 60)
-    print("  Thought: I need to read the .docx template and identify "
-          "immutable sections vs. variable fields.")
-    print("  Action: parse_template() + memory.retrieve_similar()")
+    logger.info("=" * 60)
+    logger.info("  STEP 1: Parse Template & Retrieve Memory")
+    logger.info("=" * 60)
+    logger.info("  Thought: I need to read the .docx template and identify "
+                "immutable sections vs. variable fields.")
+    logger.info("  Action: parse_template() + memory.retrieve_similar()")
 
     # Parse template
     info = parse_template(state["template_path"])
     fields = info.get("variable_fields", [])
     immutable_count = len(info["immutable_sections"])
-    print(f"  Observation: Found {immutable_count} immutable section(s), "
-          f"{len(fields)} variable field(s)")
+    logger.info("  Observation: Found %d immutable section(s), %d variable field(s)",
+                immutable_count, len(fields))
     if fields:
         for f in fields:
-            print(f"    - {f['field_id']}  (placeholder: {f['placeholder']})")
+            logger.info("    - %s  (placeholder: %s)", f['field_id'], f['placeholder'])
 
     # Initialize memory
     init_memory()
-    print("  Observation: Vector memory initialised.")
+    logger.info("  Observation: Vector memory initialised.")
 
     # Build template headers string for better embedding accuracy
     template_headers = " | ".join(
@@ -78,11 +80,11 @@ def parse_and_retrieve(state: AgentState) -> dict[str, Any]:
         template_headers=template_headers,
     )
     if examples:
-        print(f"  Observation: Found {len(examples)} similar historical case(s).")
+        logger.info("  Observation: Found %d similar historical case(s).", len(examples))
         for ex in examples:
-            print(f"    - [{ex['id']}] {ex['requirement'][:100]}")
+            logger.info("    - [%s] %s", ex['id'], ex['requirement'][:100])
     else:
-        print("  Observation: No similar historical cases found.")
+        logger.info("  Observation: No similar historical cases found.")
 
     return {
         "template_info": info,
@@ -94,25 +96,25 @@ def parse_and_retrieve(state: AgentState) -> dict[str, Any]:
 def analyze_code_if_needed(state: AgentState) -> dict[str, Any]:
     """If code is provided, analyse it with the LLM AND execute it for real output."""
     if not state.get("code", "").strip():
-        print("\n" + "=" * 60)
-        print("  STEP 2: Code Analysis & Execution (skipped)")
-        print("=" * 60)
-        print("  Thought: No source code provided — skip analysis.")
-        print("  Action: None")
+        logger.info("=" * 60)
+        logger.info("  STEP 2: Code Analysis & Execution (skipped)")
+        logger.info("=" * 60)
+        logger.info("  Thought: No source code provided — skip analysis.")
+        logger.info("  Action: None")
         return {"code_analysis": "", "code_execution_output": ""}
 
     code = state["code"]
-    print("\n" + "=" * 60)
-    print("  STEP 2: Analyze & Execute Source Code")
-    print("=" * 60)
-    print("  Thought: The user provided source code. I will statically "
-          "analyze it AND execute it to capture real output.")
-    print("  Action: tools.analyze_code() → LLM")
-    print("  Action: tools.execute_code_sandbox() → subprocess")
+    logger.info("=" * 60)
+    logger.info("  STEP 2: Analyze & Execute Source Code")
+    logger.info("=" * 60)
+    logger.info("  Thought: The user provided source code. I will statically "
+                "analyze it AND execute it to capture real output.")
+    logger.info("  Action: tools.analyze_code() → LLM")
+    logger.info("  Action: tools.execute_code_sandbox() → subprocess")
 
     # Static analysis via LLM
     analysis = analyze_code(code)
-    print(f"  Observation: Code analysis generated ({len(analysis)} chars).")
+    logger.info("  Observation: Code analysis generated (%d chars).", len(analysis))
 
     # Dynamic execution for ground-truth output
     exec_result = execute_code_sandbox(code)
@@ -126,10 +128,11 @@ def analyze_code_if_needed(state: AgentState) -> dict[str, Any]:
     output_parts.append(f"exit code: {exec_result.get('exit_code', '-1')}")
 
     exec_output = "\n".join(output_parts)
-    print(f"  Observation: Code execution completed "
-          f"(exit={exec_result.get('exit_code')}, "
-          f"stdout={len(exec_result.get('stdout', ''))} chars, "
-          f"stderr={len(exec_result.get('stderr', ''))} chars).")
+    logger.info("  Observation: Code execution completed "
+                "(exit=%s, stdout=%d chars, stderr=%d chars).",
+                exec_result.get('exit_code'),
+                len(exec_result.get('stdout', '')),
+                len(exec_result.get('stderr', '')))
 
     return {
         "code_analysis": analysis,
@@ -140,17 +143,22 @@ def analyze_code_if_needed(state: AgentState) -> dict[str, Any]:
 def generate_content(state: AgentState) -> dict[str, Any]:
     """Generate content for all variable fields iteratively via DeepSeek."""
     retry = state.get("generation_retry_count", 0)
-    print("\n" + "=" * 60)
-    print(f"  STEP 3: Generate Report Content (attempt {retry + 1})")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("  STEP 3: Generate Report Content (attempt %d)", retry + 1)
+    logger.info("=" * 60)
 
     has_few_shot = bool(state.get("few_shot"))
     has_code_exec = bool(state.get("code_execution_output", "").strip())
-    print("  Thought: I have the template structure, user requirements, "
-          f"{'and ' + str(len(state.get('few_shot', []))) + ' few-shot example(s)' if has_few_shot else 'no few-shot examples'}."
-          f"{' Real code execution output is available.' if has_code_exec else ''}"
-          " Now I will generate content for each variable field iteratively.")
-    print("  Action: tools.generate_report_iterative() → LLM (multi-pass)")
+    logger.info("  Thought: I have the template structure, user requirements, "
+                "%s."
+                "%s"
+                " Now I will generate content for each variable field iteratively.",
+                f'and {len(state.get("few_shot", []))} few-shot example(s)' if has_few_shot else 'no few-shot examples',
+                ' Real code execution output is available.' if has_code_exec else '')
+    feedback = state.get("retry_feedback", "")
+    if feedback:
+        logger.info("  Thought: Previous validation failed — retrying with feedback: %s", feedback)
+    logger.info("  Action: tools.generate_report_iterative() → LLM (multi-pass)")
 
     content = generate_report_iterative(
         report_requirements=state["user_requirement"],
@@ -158,12 +166,13 @@ def generate_content(state: AgentState) -> dict[str, Any]:
         code_execution_output=state.get("code_execution_output", ""),
         template_info=state["template_info"],
         few_shot_examples=state.get("few_shot"),
+        retry_feedback=feedback,
     )
 
-    print(f"  Observation: Generated content for {len(content)} field(s).")
+    logger.info("  Observation: Generated content for %d field(s).", len(content))
     for k, v in content.items():
         preview = v[:100].replace("\n", " ")
-        print(f"    {k}: {preview}…")
+        logger.info("    %s: %s…", k, preview)
 
     return {
         "filled_content": content,
@@ -255,7 +264,7 @@ def _llm_quality_check(content: dict[str, str], fields: list[dict]) -> list[str]
     if not config.enable_llm_judge:
         return []
 
-    from tools import _call_llm
+    from tools import _call_llm, _extract_json_from_llm_response
 
     # Build a compact evaluation prompt with all fields
     fields_block = "\n\n".join(
@@ -281,105 +290,126 @@ def _llm_quality_check(content: dict[str, str], fields: list[dict]) -> list[str]
             max_tokens=512,
             step_name="llm_judge",
         )
-        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
-        ratings = json.loads(json_match.group(0)) if json_match else {}
+        ratings = _extract_json_from_llm_response(raw)
     except Exception:
         return []
 
     # Fields rated 1-2 are considered failures
     failed = [fid for fid, rating in ratings.items() if isinstance(rating, (int, float)) and rating < 3]
     if failed:
-        print(f"  LLM Judge: flagged fields {failed} as insufficient quality.")
+        logger.info("  LLM Judge: flagged fields %s as insufficient quality.", failed)
     return failed
 
 
-# Fields that need deep academic content (same as tools._COMPLEX_FIELD_IDS)
-_COMPLEX_FIELD_IDS = {"purpose", "principle", "steps", "result", "analysis", "conclusion"}
-
-
 def validate_content(state: AgentState) -> Literal["generate_content", "fill_and_save"]:
-    """Validate generated content; retry if placeholder-like, empty, or too short."""
+    """Validate generated content; retry if placeholder-like, empty, or too short.
+
+    On failure, stores specific feedback into state so the retry prompt can
+    instruct the LLM on what to fix.
+    """
     content = state.get("filled_content", {})
     fields = state["template_info"].get("variable_fields", [])
     retry_count = state.get("generation_retry_count", 0)
 
-    print("\n" + "-" * 40)
-    print("  [Validation Gate]")
-    print("-" * 40)
+    logger.info("-" * 40)
+    logger.info("  [Validation Gate]")
+    logger.info("-" * 40)
 
     if not content:
-        print("  Thought: No content was generated. This is likely a failure.")
+        logger.info("  Thought: No content was generated. This is likely a failure.")
         if retry_count <= config.max_generation_retries:
-            print(f"  Action: Retry generation (attempt {retry_count}/{config.max_generation_retries})")
+            logger.info("  Action: Retry generation (attempt %d/%d)",
+                        retry_count, config.max_generation_retries)
+            state["retry_feedback"] = "No content was generated at all. Generate complete, detailed content."
             return "generate_content"
-        print("  Action: Max retries reached — proceed with empty content.")
+        logger.info("  Action: Max retries reached — proceed with empty content.")
         return "fill_and_save"
 
+    failure_reasons: list[str] = []
     all_ok = True
     for field in fields:
         fid = field["field_id"]
         val = content.get(fid, "").strip()
-        is_complex = fid in _COMPLEX_FIELD_IDS
+        is_complex = fid in config.complex_field_ids
 
         # Check 1: placeholder artifacts
         if _looks_like_placeholder(val, is_complex_field=is_complex):
             preview = val[:120].replace("\n", " ")
-            print(
-                f"  Field '{fid}' looks like placeholder/fallback. "
-                f"Preview: '{preview}…'"
+            logger.info(
+                "  Field '%s' looks like placeholder/fallback. Preview: '%s…'",
+                fid, preview,
             )
             all_ok = False
+            failure_reasons.append(
+                f"Field '{fid}' contains placeholder or generic fallback text. "
+                "Replace with substantive, original academic prose."
+            )
             continue
 
         # Check 2: bare minimum length
         min_len = 2 if not is_complex else 10
         if len(val) < min_len:
-            print(f"  Field '{fid}' too short ({len(val)} chars).")
+            logger.info("  Field '%s' too short (%d chars).", fid, len(val))
             all_ok = False
+            failure_reasons.append(
+                f"Field '{fid}' is too short ({len(val)} chars). "
+                "Generate 2-5 substantive paragraphs."
+            )
             continue
 
         if is_complex:
             chars = len(re.sub(r"\s+", "", val))
-            print(f"  Field '{fid}': OK ({len(val)} chars, {chars} content chars).")
+            logger.info("  Field '%s': OK (%d chars, %d content chars).", fid, len(val), chars)
         else:
-            print(f"  Field '{fid}': OK ({len(val)} chars, simple field).")
+            logger.info("  Field '%s': OK (%d chars, simple field).", fid, len(val))
 
     # Check 3: LLM-as-judge (complex fields only)
     if all_ok and config.enable_llm_judge:
-        complex_fields = [f for f in fields if f["field_id"] in _COMPLEX_FIELD_IDS]
+        complex_fields = [f for f in fields if f["field_id"] in config.complex_field_ids]
         if complex_fields:
             failed_by_judge = _llm_quality_check(content, complex_fields)
             if failed_by_judge:
                 all_ok = False
+                failure_reasons.append(
+                    f"LLM quality judge rated fields {failed_by_judge} as "
+                    "insufficient (score < 3). Write more detailed, academically "
+                    "rigorous content with specific data and analysis."
+                )
 
     if not all_ok and retry_count <= config.max_generation_retries:
-        print(
-            f"  Thought: Some fields have insufficient quality. "
-            f"Retry (attempt {retry_count}/{config.max_generation_retries})."
+        feedback = " | ".join(failure_reasons)
+        state["retry_feedback"] = feedback
+        logger.info(
+            "  Thought: Some fields have insufficient quality. Feedback: %s",
+            feedback,
+        )
+        logger.info(
+            "  Action: Retry (attempt %d/%d).",
+            retry_count, config.max_generation_retries,
         )
         return "generate_content"
 
     if all_ok:
-        print("  Observation: All fields pass validation (heuristics + LLM judge).")
+        logger.info("  Observation: All fields pass validation (heuristics + LLM judge).")
     else:
-        print("  Observation: Proceeding despite issues (max retries reached).")
+        logger.info("  Observation: Proceeding despite issues (max retries reached).")
     return "fill_and_save"
 
 
 def fill_and_save(state: AgentState) -> dict[str, Any]:
     """Fill the template with generated content and save."""
-    print("\n" + "=" * 60)
-    print("  STEP 4: Fill Template & Save")
-    print("=" * 60)
-    print("  Thought: All content is ready. I will now replace placeholders "
-          "in the template and save the output.")
-    print("  Action: tools.fill_template()")
+    logger.info("=" * 60)
+    logger.info("  STEP 4: Fill Template & Save")
+    logger.info("=" * 60)
+    logger.info("  Thought: All content is ready. I will now replace placeholders "
+                "in the template and save the output.")
+    logger.info("  Action: tools.fill_template()")
 
     path = fill_template(
         template_path=state["template_path"],
         content_mapping=state["filled_content"],
     )
-    print(f"  Observation: Report saved to: {path}")
+    logger.info("  Observation: Report saved to: %s", path)
 
     return {"output_path": path}
 
@@ -419,8 +449,8 @@ def run_agent(
     template_path: str,
     user_requirement: str,
     code: str = "",
-) -> str:
-    """Convenience wrapper: build graph, run, return output path."""
+) -> tuple[str, dict[str, str]]:
+    """Convenience wrapper: build graph, run, return (output_path, filled_content)."""
     agent = build_agent()
 
     initial: AgentState = AgentState(
@@ -430,4 +460,4 @@ def run_agent(
     )
 
     result = agent.invoke(initial)
-    return result.get("output_path", "")
+    return result.get("output_path", ""), result.get("filled_content", {})

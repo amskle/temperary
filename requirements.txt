@@ -1,5 +1,6 @@
 langgraph==0.4.7
 python-docx==1.1.2
+docxtpl==0.20.2
 chromadb==0.5.23
 sentence-transformers==3.3.1
 openai==1.68.2

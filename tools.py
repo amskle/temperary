@@ -1,6 +1,7 @@
 """Tools: template parsing, filling, code analysis, report generation."""
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -13,28 +14,21 @@ from docx import Document
 
 from config import config
 
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
-# Template parsing — detects both {{var}} and <var> style placeholders
+# Template parsing — detects {{var}} style Jinja2 placeholders
 # ---------------------------------------------------------------------------
 
-# Match {{word}} or <word> where word contains only word chars
-_VARIABLE_PATTERN = re.compile(r"\{\{(\w+)\}\}|<(\w+)>")
-
-# Placeholder styles to remember for each field
-_PLACEHOLDER_TEMPLATES: dict[str, str] = {}
+_VARIABLE_PATTERN = re.compile(r"\{\{(\w+)\}\}")
 
 
 def _extract_placeholders(text: str) -> list[dict]:
-    """Extract placeholder info from text, tracking the original style."""
+    """Extract placeholder info from text."""
     results: list[dict] = []
     for match in _VARIABLE_PATTERN.finditer(text):
-        # match.group(1) = {{...}}, match.group(2) = <...>
-        field_id = match.group(1) or match.group(2)
-        raw = match.group(0)
-        results.append({"field_id": field_id, "raw_placeholder": raw})
-        # Remember which style this field uses (first occurrence wins)
-        if field_id not in _PLACEHOLDER_TEMPLATES:
-            _PLACEHOLDER_TEMPLATES[field_id] = raw
+        field_id = match.group(1)
+        results.append({"field_id": field_id, "raw_placeholder": match.group(0)})
     return results
 
 
@@ -48,11 +42,8 @@ def parse_template(template_path: str) -> dict[str, Any]:
                                "context": str}, ...]
         }
 
-    Supports both ``{{field}}`` and ``<field>`` placeholders.
+    Supports ``{{field}}`` style Jinja2 placeholders.
     """
-    global _PLACEHOLDER_TEMPLATES
-    _PLACEHOLDER_TEMPLATES = {}  # reset per parse
-
     if not os.path.isfile(template_path):
         raise FileNotFoundError(f"Template not found: {template_path}")
 
@@ -116,21 +107,10 @@ def parse_template(template_path: str) -> dict[str, Any]:
     }
 
 
-def get_placeholder(field_id: str) -> str:
-    """Return the original placeholder string for *field_id* (e.g. ``{{name}}`` or ``<name>``)."""
-    return _PLACEHOLDER_TEMPLATES.get(field_id, "{{" + field_id + "}}")
-
 
 # ---------------------------------------------------------------------------
-# Template filling — supports both {{var}} and <var> placeholders
+# Template filling — DocxTemplate renders Jinja2 {{field}} placeholders at XML level
 # ---------------------------------------------------------------------------
-
-
-def _replace_in_text(text: str, field_id: str, replacement: str) -> str:
-    """Replace both ``{{field_id}}`` and ``<field_id>`` in *text*."""
-    text = text.replace("{{" + field_id + "}}", replacement)
-    text = text.replace("<" + field_id + ">", replacement)
-    return text
 
 
 def fill_template(
@@ -138,32 +118,15 @@ def fill_template(
     content_mapping: dict[str, str],
     output_path: str | None = None,
 ) -> str:
-    """Replace ``{{field}}`` and ``<field>`` placeholders in a copy of *template_path*.
+    """Render ``{{field}}`` placeholders with DocxTemplate and save.
 
-    Returns the path of the saved document.
+    DocxTemplate works at the XML level, so it naturally handles
+    placeholders split across multiple runs by Word.
     """
-    doc = Document(template_path)
+    from docxtpl import DocxTemplate
 
-    # Replace in paragraphs — iterate fields inside runs so each field gets replaced
-    for para in doc.paragraphs:
-        for field_id, replacement in content_mapping.items():
-            for run in para.runs:
-                if ("{{" + field_id + "}}" in run.text
-                        or "<" + field_id + ">" in run.text):
-                    run.text = _replace_in_text(run.text, field_id, replacement)
-
-    # Replace in tables
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for field_id, replacement in content_mapping.items():
-                    for para in cell.paragraphs:
-                        for run in para.runs:
-                            if ("{{" + field_id + "}}" in run.text
-                                    or "<" + field_id + ">" in run.text):
-                                run.text = _replace_in_text(
-                                    run.text, field_id, replacement
-                                )
+    doc = DocxTemplate(template_path)
+    doc.render(content_mapping)
 
     if output_path is None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -194,8 +157,8 @@ def _call_llm(
 
     last_exc: Exception | None = None
 
-    print(f"  Thought: Need to call LLM (model={models_to_try[0]})")
-    print(f"  Action: _call_llm[{step_name}]")
+    logger.info("Thought: Need to call LLM (model=%s)", models_to_try[0])
+    logger.info("Action: _call_llm[%s]", step_name)
 
     for attempt in range(config.max_retries):
         model = models_to_try[0] if attempt == 0 else models_to_try[-1]
@@ -215,21 +178,24 @@ def _call_llm(
                 max_tokens=max_tokens,
             )
             content = resp.choices[0].message.content or ""
-            print(
-                f"  Observation: LLM responded successfully "
-                f"({len(content)} chars, model={model})"
+            logger.info(
+                "Observation: LLM responded successfully (%d chars, model=%s)",
+                len(content), model,
             )
             return content
 
         except Exception as exc:
             last_exc = exc
-            print(
-                f"  [WARN] LLM call failed (attempt {attempt + 1}, model={model}): "
-                f"{exc}"
+            logger.warning(
+                "LLM call failed (attempt %d, model=%s): %s",
+                attempt + 1, model, exc,
             )
             if attempt < config.max_retries - 1:
                 delay = config.retry_base_delay * (2**attempt)
-                print(f"  Observation: will retry in {delay:.0f}s (exponential backoff) …")
+                logger.info(
+                    "Observation: will retry in %.0fs (exponential backoff) …",
+                    delay,
+                )
                 time.sleep(delay)
 
     raise RuntimeError(
@@ -327,26 +293,6 @@ def execute_code_sandbox(code: str, timeout: int | None = None) -> dict[str, str
 # Report content generation
 # ---------------------------------------------------------------------------
 
-_GENERATE_SYSTEM = (
-    "You are an AI assistant that helps college students write lab reports. "
-    "You will receive:\n"
-    "- The lab report template structure (immutable sections)\n"
-    "- The list of fields to fill (variable fields)\n"
-    "- The user's requirements for the report\n"
-    "- Code analysis (if applicable)\n"
-    "- Code execution output (if applicable)\n"
-    "- Similar past examples (few-shot)\n\n"
-    "Generate professional, academically appropriate content for each variable "
-    "field. The content must be detailed, accurate, and suitable for a "
-    "college-level lab report.\n\n"
-    "IMPORTANT:\n"
-    "- DO NOT change, rephrase, or rewrite the immutable sections.\n"
-    "- Only produce content for the listed variable fields.\n"
-    "- Each field should contain complete paragraphs.\n"
-    "- If the field expects code output, show realistic output.\n"
-    "- Return ONLY a JSON object with field_id as key and content as value."
-)
-
 _GENERATE_SINGLE_FIELD_SYSTEM = (
     "You are an AI assistant helping to write ONE specific section of a college "
     "lab report. Generate detailed, academically rigorous content for this "
@@ -368,10 +314,6 @@ _GENERATE_SIMPLE_FIELDS_SYSTEM = (
     "Return ONLY a JSON object with field_id as key and value as content."
 )
 
-# Fields that benefit from focused, single-field generation
-_COMPLEX_FIELD_IDS = {"purpose", "principle", "steps", "result", "analysis", "conclusion"}
-
-
 def _build_few_shot_text(few_shot_examples: list[dict] | None) -> str:
     """Format few-shot examples into a prompt-ready text block."""
     if not few_shot_examples:
@@ -391,6 +333,30 @@ def _build_immutable_context(template_info: dict[str, Any]) -> str:
         f"  [{s['type']}] {s['text'][:3000]}"
         for s in template_info.get("immutable_sections", [])
     )
+
+
+def _extract_json_from_llm_response(raw: str) -> dict:
+    """Extract and parse a JSON object from LLM output.
+
+    Handles markdown code fences (`` ```json ... ``` ``) and stray text
+    surrounding the JSON object. Returns an empty dict on failure.
+    """
+    # Strip markdown code fences
+    fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
+    if fence_match:
+        raw = fence_match.group(1)
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        brace_start = raw.find("{")
+        brace_end = raw.rfind("}")
+        if brace_start != -1 and brace_end > brace_start:
+            try:
+                return json.loads(raw[brace_start : brace_end + 1])
+            except json.JSONDecodeError:
+                pass
+        return {}
 
 
 def _generate_simple_fields(
@@ -423,23 +389,7 @@ def _generate_simple_fields(
         step_name="generate_simple_fields",
     )
 
-    # Parse JSON
-    json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
-    if json_match:
-        raw = json_match.group(1)
-
-    try:
-        result = json.loads(raw)
-    except json.JSONDecodeError:
-        brace_start = raw.find("{")
-        brace_end = raw.rfind("}")
-        if brace_start != -1 and brace_end > brace_start:
-            try:
-                result = json.loads(raw[brace_start : brace_end + 1])
-            except json.JSONDecodeError:
-                result = {}
-        else:
-            result = {}
+    result = _extract_json_from_llm_response(raw)
 
     # Ensure all requested fields are present
     out: dict[str, str] = {}
@@ -450,6 +400,63 @@ def _generate_simple_fields(
     return out
 
 
+_SUMMARIZE_PRIOR_SYSTEM = (
+    "You are a precise academic summarizer. Condense the following generated "
+    "lab report sections into a concise, structured summary. Preserve key "
+    "details: experimental values, equations, named methods, conclusions, "
+    "and cross-references. The summary will be used as context for generating "
+    "the NEXT section, so include anything needed for logical continuity."
+)
+
+
+def _summarize_prior_content(prior_text: str) -> str:
+    """Compress long prior-content text into a summary via an LLM call."""
+    raw = _call_llm(
+        system_prompt=_SUMMARIZE_PRIOR_SYSTEM,
+        user_prompt=(
+            "Summarize the following lab report sections. "
+            "Keep all quantitative data, named methods, equations, and key "
+            "conclusions. Write a single flowing paragraph (≤300 words).\n\n"
+            f"{prior_text}"
+        ),
+        temperature=0.2,
+        max_tokens=1024,
+        step_name="summarize_prior",
+    )
+    return raw.strip()
+
+
+def _build_prior_context(prior_content: dict[str, str]) -> str:
+    """Build prior-section context, summarising if the raw text is too long."""
+    if not prior_content:
+        return ""
+
+    prior_lines = []
+    for pk, pv in prior_content.items():
+        preview = pv[:500].replace("\n", " ")
+        prior_lines.append(f"  [{pk}]: {preview}")
+
+    raw_text = (
+        "--- Previously generated sections (read these to maintain "
+        "consistency and avoid contradiction) ---\n"
+        + "\n".join(prior_lines)
+    )
+
+    if len(raw_text) > config.prior_content_summary_threshold:
+        logger.info(
+            "  Prior content length %d exceeds threshold %d — summarising.",
+            len(raw_text), config.prior_content_summary_threshold,
+        )
+        summary = _summarize_prior_content(raw_text)
+        return (
+            "--- Summary of previously generated sections (read for "
+            "consistency and logical continuity) ---\n"
+            f"{summary}\n\n"
+        )
+
+    return raw_text + "\n\n"
+
+
 def _generate_single_field(
     field: dict,
     immutable_context: str,
@@ -458,24 +465,13 @@ def _generate_single_field(
     code_execution_output: str,
     few_shot_text: str,
     prior_content: dict[str, str],
+    retry_feedback: str = "",
 ) -> str:
     """Generate one complex field with full context including prior sections."""
     fid = field["field_id"]
     context = field.get("context", "")[:3000]
 
-    # Build prior content summary for context chaining
-    prior_text = ""
-    if prior_content:
-        prior_lines = []
-        for pk, pv in prior_content.items():
-            preview = pv[:500].replace("\n", " ")
-            prior_lines.append(f"  [{pk}]: {preview}")
-        prior_text = (
-            "--- Previously generated sections (read these to maintain "
-            "consistency and avoid contradiction) ---\n"
-            + "\n".join(prior_lines)
-            + "\n\n"
-        )
+    prior_text = _build_prior_context(prior_content)
 
     code_section = ""
     if code_analysis:
@@ -486,6 +482,15 @@ def _generate_single_field(
             f"{code_execution_output}\n\n"
         )
 
+    retry_section = ""
+    if retry_feedback:
+        retry_section = (
+            "--- IMPORTANT: Previous generation attempt failed ---\n"
+            f"Issues to fix: {retry_feedback}\n"
+            "Please ensure the content above is substantive, complete, and "
+            "free of placeholder or generic fallback text.\n\n"
+        )
+
     user_prompt = (
         f"--- Template structure (for context) ---\n{immutable_context}\n\n"
         f"--- Field to generate ---\n"
@@ -494,6 +499,7 @@ def _generate_single_field(
         f"{prior_text}"
         f"--- User requirements ---\n{report_requirements}\n\n"
         f"{code_section}"
+        f"{retry_section}"
         f"{few_shot_text}\n\n"
         f"Generate the complete content for the \"{fid}\" section. "
         f"Write 2-5 detailed paragraphs with substantive academic content. "
@@ -517,6 +523,7 @@ def generate_report_iterative(
     code_execution_output: str,
     template_info: dict[str, Any],
     few_shot_examples: list[dict] | None = None,
+    retry_feedback: str = "",
 ) -> dict[str, str]:
     """Generate report content iteratively — one complex field at a time.
 
@@ -524,15 +531,18 @@ def generate_report_iterative(
     (purpose, principle, steps, result, analysis, conclusion) are generated
     individually with all prior content passed as context. This forces the
     LLM to focus its full attention and output tokens on one section at a time.
+
+    If *retry_feedback* is non-empty, it is injected into each complex-field
+    prompt so the LLM knows what failed the previous validation pass.
     """
     variable_fields = template_info.get("variable_fields", [])
 
     # Separate simple vs complex, preserving template order
     simple_fields = [
-        f for f in variable_fields if f["field_id"] not in _COMPLEX_FIELD_IDS
+        f for f in variable_fields if f["field_id"] not in config.complex_field_ids
     ]
     complex_fields = [
-        f for f in variable_fields if f["field_id"] in _COMPLEX_FIELD_IDS
+        f for f in variable_fields if f["field_id"] in config.complex_field_ids
     ]
 
     immutable_context = _build_immutable_context(template_info)
@@ -550,7 +560,7 @@ def generate_report_iterative(
     # Phase 2: generate each complex field individually with chained context
     for field in complex_fields:
         fid = field["field_id"]
-        print(f"  Action: Generating field '{fid}' (iterative) …")
+        logger.info("Action: Generating field '%s' (iterative) …", fid)
         generated = _generate_single_field(
             field=field,
             immutable_context=immutable_context,
@@ -559,9 +569,10 @@ def generate_report_iterative(
             code_execution_output=code_execution_output,
             few_shot_text=few_shot_text,
             prior_content=result,
+            retry_feedback=retry_feedback,
         )
         result[fid] = generated
-        print(f"  Observation: '{fid}' generated ({len(generated)} chars)")
+        logger.info("Observation: '%s' generated (%d chars)", fid, len(generated))
 
     # Fill any missing fields
     for field in variable_fields:
@@ -569,97 +580,4 @@ def generate_report_iterative(
         if fid not in result or not result[fid].strip():
             result[fid] = f"[Content for {fid} — see generated output below]"
 
-    return result
-
-
-def generate_report(
-    report_requirements: str,
-    code_analysis: str,
-    template_info: dict[str, Any],
-    few_shot_examples: list[dict] | None = None,
-    code_execution_output: str = "",
-) -> dict[str, str]:
-    """Generate content for each variable field via DeepSeek (single-pass fallback)."""
-    # Build the user prompt — full context (no aggressive truncation)
-    sections_text = "\n".join(
-        f"  [{s['type']}] {s['text'][:3000]}"
-        for s in template_info.get("immutable_sections", [])
-    )
-    fields_text = "\n".join(
-        f"  - {f['field_id']}  (context: {f['context'][:3000]})"
-        for f in template_info.get("variable_fields", [])
-    )
-
-    few_shot_text = _build_few_shot_text(few_shot_examples)
-
-    code_output_section = ""
-    if code_execution_output and code_execution_output.strip():
-        code_output_section = (
-            f"--- Actual code execution output (ground truth) ---\n"
-            f"{code_execution_output}\n\n"
-        )
-
-    user_prompt = (
-        f"--- Template immutable sections ---\n{sections_text}\n\n"
-        f"--- Variable fields to fill ---\n{fields_text}\n\n"
-        f"--- User requirements ---\n{report_requirements}\n\n"
-        f"--- Code analysis ---\n{code_analysis}\n\n"
-        f"{code_output_section}"
-        f"{few_shot_text}\n\n"
-        "Return a valid JSON object where keys are field_id and values are the "
-        "generated content. Example:\n"
-        '{"purpose": "The purpose of this experiment is ...", '
-        '"result": "The output of the program is ..."}\n\n'
-        "IMPORTANT: Return ONLY the JSON object, no other text."
-    )
-
-    raw = _call_llm(
-        system_prompt=_GENERATE_SYSTEM,
-        user_prompt=user_prompt,
-        temperature=0.3,
-        max_tokens=8192,
-        step_name="generate_report",
-    )
-
-    # Parse JSON from LLM output (handle ```json fences and stray text)
-    json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
-    if json_match:
-        raw = json_match.group(1)
-
-    try:
-        result = json.loads(raw)
-    except json.JSONDecodeError:
-        # Try to find anything that looks like JSON
-        brace_start = raw.find("{")
-        brace_end = raw.rfind("}")
-        if brace_start != -1 and brace_end > brace_start:
-            try:
-                result = json.loads(raw[brace_start : brace_end + 1])
-            except json.JSONDecodeError:
-                result = _fallback_parse(raw, template_info)
-        else:
-            result = _fallback_parse(raw, template_info)
-
-    # Ensure all required fields are present
-    for field in template_info.get("variable_fields", []):
-        fid = field["field_id"]
-        if fid not in result or not result[fid].strip():
-            result[fid] = f"[Content for {fid} – see generated output below]"
-
-    return result
-
-
-def _fallback_parse(raw: str, template_info: dict[str, Any]) -> dict[str, str]:
-    """If LLM output is not valid JSON, try to extract content heuristically."""
-    result: dict[str, str] = {}
-    for field in template_info.get("variable_fields", []):
-        fid = field["field_id"]
-        pattern = re.compile(
-            rf"{re.escape(fid)}\s*[:：]\s*(.+?)(?=\n\s*\w+\s*[:：]|\Z)", re.DOTALL
-        )
-        m = pattern.search(raw)
-        if m:
-            result[fid] = m.group(1).strip()
-        else:
-            result[fid] = f"[Generated content for {fid}]"
     return result
