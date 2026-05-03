@@ -13,6 +13,7 @@ from tools import (
     analyze_code,
     execute_code_sandbox,
     fill_template,
+    fill_template_intelligent,
     generate_report_iterative,
     parse_template,
 )
@@ -56,7 +57,7 @@ def parse_and_retrieve(state: AgentState) -> dict[str, Any]:
     logger.info("  Action: parse_template() + memory.retrieve_similar()")
 
     # Parse template
-    info = parse_template(state["template_path"])
+    info = parse_template(state["template_path"], requirements=state["user_requirement"])
     fields = info.get("variable_fields", [])
     immutable_count = len(info["immutable_sections"])
     logger.info("  Observation: Found %d immutable section(s), %d variable field(s)",
@@ -141,7 +142,7 @@ def analyze_code_if_needed(state: AgentState) -> dict[str, Any]:
 
 
 def generate_content(state: AgentState) -> dict[str, Any]:
-    """Generate content for all variable fields iteratively via DeepSeek."""
+    """Generate content for all variable fields iteratively via MiMo."""
     retry = state.get("generation_retry_count", 0)
     logger.info("=" * 60)
     logger.info("  STEP 3: Generate Report Content (attempt %d)", retry + 1)
@@ -287,7 +288,7 @@ def _llm_quality_check(content: dict[str, str], fields: list[dict]) -> list[str]
             "Return ONLY valid JSON.",
             user_prompt=prompt,
             temperature=0.1,
-            max_tokens=512,
+            max_tokens=8192,
             step_name="llm_judge",
         )
         ratings = _extract_json_from_llm_response(raw)
@@ -401,16 +402,31 @@ def fill_and_save(state: AgentState) -> dict[str, Any]:
     logger.info("=" * 60)
     logger.info("  STEP 4: Fill Template & Save")
     logger.info("=" * 60)
-    logger.info("  Thought: All content is ready. I will now replace placeholders "
-                "in the template and save the output.")
-    logger.info("  Action: tools.fill_template()")
 
-    path = fill_template(
-        template_path=state["template_path"],
-        content_mapping=state["filled_content"],
-    )
+    template_info = state["template_info"]
+    llm_sections = template_info.get("llm_sections")
+
+    if llm_sections:
+        # LLM-based intelligent filling (no placeholder dependency)
+        logger.info("  Thought: Template was analyzed by LLM. "
+                    "Using intelligent filling via header text matching.")
+        logger.info("  Action: tools.fill_template_intelligent()")
+        path = fill_template_intelligent(
+            template_path=state["template_path"],
+            llm_sections=llm_sections,
+            content_mapping=state["filled_content"],
+        )
+    else:
+        # Traditional placeholder-based filling
+        logger.info("  Thought: All content is ready. I will now replace placeholders "
+                    "in the template and save the output.")
+        logger.info("  Action: tools.fill_template()")
+        path = fill_template(
+            template_path=state["template_path"],
+            content_mapping=state["filled_content"],
+        )
+
     logger.info("  Observation: Report saved to: %s", path)
-
     return {"output_path": path}
 
 

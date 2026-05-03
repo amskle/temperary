@@ -12,6 +12,8 @@ from pathlib import Path
 import streamlit as st
 
 from agent import run_agent
+from memory import add_memory
+from tools import parse_template
 
 # ---------------------------------------------------------------------------
 # Log collector — captures logger output for display in the UI
@@ -86,7 +88,7 @@ st.set_page_config(page_title="LabReportAgent", page_icon="📄", layout="wide")
 
 with st.sidebar:
     st.title("📄 LabReportAgent")
-    st.caption("AI 实验报告生成助手 — LangGraph + DeepSeek")
+    st.caption("AI 实验报告生成助手 — LangGraph + MiMo")
     st.divider()
 
     language = st.selectbox(
@@ -183,6 +185,39 @@ if generate_btn:
             st.divider()
             with st.expander("🔍 Agent 思考过程 (ReAct Trace)", expanded=False):
                 st.code("\n".join(collector.logs), language="text")
+
+        # ---- User rating ----
+        st.divider()
+        st.subheader("⭐ 给这份报告评分")
+        st.caption("评分 ≥ 4 分会存入记忆库，下次生成类似报告时作为参考")
+        rating = st.slider("评分", min_value=1, max_value=5, value=3, key="rating_slider")
+        rating_labels = {1: "很差", 2: "较差", 3: "一般", 4: "不错", 5: "优秀"}
+        st.write(f"当前评分: **{rating}** — {rating_labels[rating]}")
+
+        if st.button("📩 提交评分", key="submit_rating"):
+            try:
+                # Extract template headers for better embedding
+                template_headers = ""
+                try:
+                    info = parse_template(template_path)
+                    template_headers = " | ".join(
+                        f["field_id"] for f in info.get("variable_fields", [])
+                    )
+                except Exception:
+                    pass
+
+                add_memory(
+                    requirement=full_requirement,
+                    generated_content=filled_content,
+                    rating=rating,
+                    template_headers=template_headers,
+                )
+                if rating >= 4:
+                    st.success(f"✅ 感谢评分！评分 {rating} 分已存入记忆库，将用于优化未来报告生成。")
+                else:
+                    st.info(f"ℹ️ 感谢评分！评分 {rating} 分（< 4 分不存入记忆库）。")
+            except Exception as e:
+                st.warning(f"评分保存失败: {e}")
 
     except Exception as exc:
         st.error(f"❌ 生成失败: {exc}")

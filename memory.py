@@ -1,7 +1,6 @@
 """Vector memory – store and retrieve past report generations.
 
-Uses Chroma DB with sentence-transformers embeddings (with optional DeepSeek
-embedding fallback).
+Uses Chroma DB with sentence-transformers embeddings.
 """
 
 import hashlib

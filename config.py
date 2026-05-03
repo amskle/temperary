@@ -4,6 +4,10 @@ import logging
 import os
 from dataclasses import dataclass, field
 
+from dotenv import load_dotenv
+
+load_dotenv()  # read .env file before os.getenv() calls below
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(levelname)s | %(name)s | %(message)s",
@@ -12,20 +16,20 @@ logging.basicConfig(
 
 @dataclass
 class Config:
-    # DeepSeek API
-    deepseek_api_key: str = field(
-        default_factory=lambda: os.getenv("DEEPSEEK_API_KEY", "")
+    # Xiaomi MiMo API (Anthropic-compatible)
+    xiaomi_api_key: str = field(
+        default_factory=lambda: os.getenv("XIAOMI_API_KEY", "")
     )
-    deepseek_base_url: str = os.getenv(
-        "DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"
+    xiaomi_base_url: str = os.getenv(
+        "XIAOMI_BASE_URL", "https://token-plan-cn.xiaomimimo.com/anthropic"
     )
 
-    # Primary model: user wants deepseek-v4-pro by default
-    deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
+    # Primary model
+    xiaomi_model: str = os.getenv("XIAOMI_MODEL", "mimo-v2.5-pro")
 
-    # Fallback model: flash variant when pro rate-limits or times out
-    deepseek_fallback_model: str = os.getenv(
-        "DEEPSEEK_FALLBACK_MODEL", "deepseek-v4-flash"
+    # Fallback model
+    xiaomi_fallback_model: str = os.getenv(
+        "XIAOMI_FALLBACK_MODEL", "mimo-v2.5"
     )
 
     # Retry & timeout (exponential backoff, up to 3 attempts)
@@ -65,8 +69,8 @@ class Config:
 config = Config()
 
 # Validate on import
-if not config.deepseek_api_key:
+if not config.xiaomi_api_key:
     logging.warning(
-        "DEEPSEEK_API_KEY is not set. "
-        "Use 'export DEEPSEEK_API_KEY=sk-...'"
+        "XIAOMI_API_KEY is not set. "
+        "Use 'export XIAOMI_API_KEY=...'"
     )

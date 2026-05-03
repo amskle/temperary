@@ -25,14 +25,14 @@ An AI-powered lab report generator for college students. Upload a `.docx` templa
 1. **Parse template** — reads the `.docx`, identifies `{{variable}}` fields vs. immutable sections.
 2. **Retrieve memory** — vector-search past similar requests for few-shot examples.
 3. **Analyze code** (optional) — if source code is provided, LLM explains its purpose & output.
-4. **Generate content** — calls DeepSeek to produce content for each variable field.
+4. **Generate content** — calls Xiaomi MiMo to produce content for each variable field.
 5. **Validate & retry** — if content is empty or too short, retries (up to 3×).
 6. **Fill & save** — replaces placeholders in a copy of the template, saves the result.
 
 ## Requirements
 
 - Python 3.10+
-- A [DeepSeek](https://platform.deepseek.com/) API key
+- A Xiaomi MiMo API key
 
 ## Setup
 
@@ -47,11 +47,11 @@ source venv/bin/activate   # or venv\Scripts\activate on Windows
 # 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. Set your DeepSeek API key
-export DEEPSEEK_API_KEY="sk-..."
+# 4. Set your Xiaomi MiMo API key
+export XIAOMI_API_KEY="your-key-here"
 # Optional: change the base URL or model
-export DEEPSEEK_BASE_URL="https://api.deepseek.com/v1"
-export DEEPSEEK_MODEL="deepseek-chat"
+export XIAOMI_BASE_URL="https://token-plan-cn.xiaomimimo.com/anthropic"
+export XIAOMI_MODEL="MiMo-V2.5-Pro"
 ```
 
 ## Usage
@@ -119,9 +119,9 @@ pytest tests/
 
 | Variable | Default | Description |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | — | API key (required) |
-| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/v1` | API base URL |
-| `DEEPSEEK_MODEL` | `deepseek-chat` | Primary model |
-| `DEEPSEEK_FALLBACK_MODEL` | `deepseek-chat` | Fallback model |
+| `XIAOMI_API_KEY` | — | API key (required) |
+| `XIAOMI_BASE_URL` | `https://token-plan-cn.xiaomimimo.com/anthropic` | API base URL |
+| `XIAOMI_MODEL` | `MiMo-V2.5-Pro` | Primary model |
+| `XIAOMI_FALLBACK_MODEL` | `MiMo-V2.5` | Fallback model |
 | `CHROMA_DB_PATH` | `./chroma_db` | Vector DB directory |
 | `OUTPUT_DIR` | `.` | Output directory for generated reports |

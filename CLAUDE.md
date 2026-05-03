@@ -37,13 +37,18 @@ main.py (CLI) → agent.py (图) → tools.py (解析/填充/生成/执行)
 - **迭代生成**（`tools.py:generate_report_iterative`）：简单字段（姓名、学号、日期）批量生成。复杂字段（目的、原理、步骤、结果、分析、结论）逐个生成，每个字段都会收到之前已生成的所有章节作为链式上下文。这迫使 LLM 将全部输出 token 集中在一个章节上，并保持一致性。
 - **双占位符风格**：同时支持 `{{var}}` 和 `<var>` 两种语法。每种字段的原始风格会被记住，并在输出时保持一致。
 - **带验证的重试**：生成后，内容会经过占位符残留检测、最小长度检查和可选的 LLM 质量评分。最多重试 `max_generation_retries`（2 次）。
-- **LLM 容错**（`tools.py:_call_llm`）：指数退避重试，失败时自动切换到备用模型。配置见 `config.py`。
+- **LLM 容错**（`tools.py:_call_llm`）：指数退避重试，失败时自动切换到备用模型。使用小米 MiMo API（Anthropic 兼容）。配置见 `config.py`。
 - **代码执行沙箱**（`tools.py:execute_code_sandbox`）：用户提供的 Python 代码在子进程中运行，30 秒超时。真实的 stdout/stderr 被捕获并作为"真值"注入到生成 prompt 中。
 - **少样本记忆**（`memory.py`）：用户评分 ≥4 时存入 ChromaDB。嵌入向量将模板字段标题与需求文本结合，使得检索能同时匹配主题内容和报告结构。检索到的示例会输入到生成 prompt 中。
 
 ### 配置（`config.py`）
 
 所有设置通过环境变量配置，有合理的默认值。关键变量：
-- `DEEPSEEK_API_KEY`（必填）
-- `DEEPSEEK_MODEL`（默认：`deepseek-v4-pro`），`DEEPSEEK_FALLBACK_MODEL`（默认：`deepseek-v4-flash`）
+- `XIAOMI_API_KEY`（必填）
+- `XIAOMI_MODEL`（默认：`MiMo-V2.5-Pro`），`XIAOMI_FALLBACK_MODEL`（默认：`MiMo-V2.5`）
 - `CHROMA_DB_PATH`、`OUTPUT_DIR`
+
+
+
+### 要求
+- 用中文回答

@@ -54,7 +54,7 @@ def main() -> None:
 
     logger.info("=" * 60)
     logger.info("  LabReportAgent – AI Lab Report Generator")
-    logger.info("  Powered by LangGraph + DeepSeek")
+    logger.info("  Powered by LangGraph + MiMo")
     logger.info("=" * 60)
     logger.info("  Template   : %s", args.template)
     logger.info("  Requirement: %s", requirement[:120] + ('…' if len(requirement) > 120 else ''))
