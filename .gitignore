@@ -1,0 +1,41 @@
+# 环境变量（包含 API 密钥等敏感信息）
+.env
+.env.*
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 测试缓存
+.pytest_cache/
+
+# ChromaDB 向量数据库（包含用户记忆数据）
+chroma_db/
+
+# 生成的输出文件
+output_*.docx
+output/
+
+# Claude Code 设置
+.claude/
+
+# 通用敏感文件
+*.key
+*.pem
+*.crt
+*.p12
+credentials.json
+secret.json
+*.log
+
+# IDE 设置
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
